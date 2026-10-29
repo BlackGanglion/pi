@@ -182,7 +182,10 @@ export class Bm25Ranker implements ToolRanker {
 }
 
 export const toolSearchSchema = Type.Object({
-	query: Type.String({ description: "Search query for deferred tools." }),
+	query: Type.String({
+		description:
+			"Search query for deferred tools. Prefix with +namespace to search only that namespace (or its registered alias), for example +docs read_page. Use +namespace alone to list its tools.",
+	}),
 	limit: Type.Optional(
 		Type.Number({ description: `Maximum number of tools to return. Defaults to ${DEFAULT_TOOL_SEARCH_LIMIT}.` }),
 	),
@@ -222,10 +225,25 @@ function searchAndLoad(
 	query: string,
 	limit: number,
 ): ToolSearchResultTool[] {
+	const scoped = /^\s*\+(\S+)(?:\s+([\s\S]*))?$/.exec(query);
+	const namespace = scoped?.[1];
+	const search = scoped ? (scoped[2] ?? "").trim() : query;
 	const active = tools.getActiveTools();
-	const candidates = tools.getAllTools().filter((tool) => isSearchable(tool.exposure) && !active.includes(tool.name));
+	const candidates = tools
+		.getAllTools()
+		.filter(
+			(tool) =>
+				isSearchable(tool.exposure) &&
+				!active.includes(tool.name) &&
+				(namespace === undefined ||
+					tool.namespace?.name === namespace ||
+					tool.namespace?.aliases?.includes(namespace)),
+		);
 	const documents = candidates.map((tool) => createToolSearchDocument(tool, tool.namespace));
-	const matches = new Bm25Ranker().rank(query, documents, limit);
+	const matches =
+		namespace !== undefined && search === ""
+			? candidates.slice(0, limit).map((tool) => ({ name: tool.name }))
+			: new Bm25Ranker().rank(search, documents, limit);
 	if (matches.length > 0) tools.setActiveTools([...active, ...matches.map((match) => match.name)]);
 	return matches.map((match) => ({
 		name: match.name,
@@ -237,7 +255,7 @@ function searchAndLoad(
  * The `tool_search` description. It does not list the searchable tools or their namespaces, so it
  * stays the same while tools are registered, for example when MCP servers connect.
  */
-export const TOOL_SEARCH_DESCRIPTION = `# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nSome of the tools, such as tools of MCP servers, may not have been provided to you upfront, and you should use this tool (\`${TOOL_SEARCH_TOOL_NAME}\`) to search for the required tools. For MCP tool discovery, always use \`${TOOL_SEARCH_TOOL_NAME}\`.`;
+export const TOOL_SEARCH_DESCRIPTION = `# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nPrefix the query with +namespace to search only tools registered in that namespace or its alias, for example \`+docs read_page\`. Namespace names and aliases are case-sensitive. Unknown namespaces return no matches. Use \`+namespace\` alone to list its tools, up to the limit.\n\nSome of the tools, such as tools of MCP servers, may not have been provided to you upfront, and you should use this tool (\`${TOOL_SEARCH_TOOL_NAME}\`) to search for the required tools. For MCP tool discovery, always use \`${TOOL_SEARCH_TOOL_NAME}\`.`;
 
 export function createToolSearchToolDefinition(
 	options: ToolSearchToolOptions = {},
